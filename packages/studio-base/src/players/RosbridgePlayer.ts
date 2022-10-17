@@ -160,7 +160,7 @@ export default class RosbridgePlayer implements Player {
       this._problems.removeProblem("rosbridge:connection-failed");
       this._rosClient = rosClient;
 
-      this._setupPublishers();
+      this._setupPublishers({ advertisePublishers: true });
       void this._requestTopics({ forceUpdate: true });
     });
 
@@ -579,7 +579,7 @@ export default class RosbridgePlayer implements Player {
     }
     this._topicPublishers.clear();
     this._advertisements = publishers;
-    this._setupPublishers();
+    this._setupPublishers({ advertisePublishers: false });
   }
 
   public setParameter(_key: string, _value: ParameterValue): void {
@@ -662,7 +662,7 @@ export default class RosbridgePlayer implements Player {
     // no-op
   }
 
-  private _setupPublishers(): void {
+  private _setupPublishers(opt?: { advertisePublishers: boolean }): void {
     // This function will be called again once a connection is established
     if (!this._rosClient) {
       return;
@@ -672,16 +672,18 @@ export default class RosbridgePlayer implements Player {
       return;
     }
 
+    const { advertisePublishers = false } = opt ?? {};
     for (const { topic, schemaName: datatype } of this._advertisements) {
-      this._topicPublishers.set(
-        topic,
-        new roslib.Topic({
-          ros: this._rosClient,
-          name: topic,
-          messageType: datatype,
-          queue_size: 0,
-        }),
-      );
+      const roslibTopic = new roslib.Topic({
+        ros: this._rosClient,
+        name: topic,
+        messageType: datatype,
+        queue_size: 0,
+      });
+      this._topicPublishers.set(topic, roslibTopic);
+      if (advertisePublishers) {
+        roslibTopic.advertise();
+      }
     }
   }
 
