@@ -237,6 +237,7 @@ export default class FoxgloveWebSocketPlayer implements Player {
     });
 
     client.on("message", ({ subscriptionId, timestamp, data }) => {
+      this._receivedBytes += data.byteLength;
       if (!this._hasReceivedMessage) {
         this._hasReceivedMessage = true;
         this._metricsCollector.recordTimeToFirstMsgs();
@@ -474,5 +475,5 @@ export default class FoxgloveWebSocketPlayer implements Player {
     throw new Error("Service calls are not supported by the Foxglove WebSocket connection");
   }
 
-  public setGlobalVariables(): void {}
+  public setGlobalVariables(): void { }
 }
