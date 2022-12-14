@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from "uuid";
 import { debouncePromise } from "@foxglove/den/async";
 import Log from "@foxglove/log";
 import { parseChannel, ParsedChannel } from "@foxglove/mcap-support";
-import { fromNanoSec, isGreaterThan, isLessThan, Time } from "@foxglove/rostime";
+import { fromMillis, fromNanoSec, isGreaterThan, isLessThan, Time } from "@foxglove/rostime";
 import PlayerProblemManager from "@foxglove/studio-base/players/PlayerProblemManager";
 import {
   AdvertiseOptions,
@@ -24,7 +24,13 @@ import {
   TopicStats,
 } from "@foxglove/studio-base/players/types";
 import { RosDatatypes } from "@foxglove/studio-base/types/RosDatatypes";
-import { Channel, ChannelId, FoxgloveClient, SubscriptionId } from "@foxglove/ws-protocol";
+import {
+  Channel,
+  ChannelId,
+  FoxgloveClient,
+  ServerCapability,
+  SubscriptionId,
+} from "@foxglove/ws-protocol";
 
 const log = Log.getLogger(__dirname);
 
@@ -57,10 +63,9 @@ export default class FoxgloveWebSocketPlayer implements Player {
 
   /** Earliest time seen */
   private _startTime?: Time;
-  /** Most recently-seen time */
-  private _currentTime?: Time;
-  /** Latest time seen */
-  private _endTime?: Time;
+  /* The most recent published time, if available */
+  private _clockTime?: Time;
+  private _serverPublishesTime = false;
 
   private _unresolvedSubscriptions = new Set<string>();
   private _resolvedSubscriptionsByTopic = new Map<string, SubscriptionId>();
@@ -121,8 +126,8 @@ export default class FoxgloveWebSocketPlayer implements Player {
       log.info("Connection closed:", event);
       this._presence = PlayerPresence.RECONNECTING;
       this._startTime = undefined;
-      this._currentTime = undefined;
-      this._endTime = undefined;
+      this._clockTime = undefined;
+      this._serverPublishesTime = false;
 
       for (const topic of this._resolvedSubscriptionsByTopic.keys()) {
         this._unresolvedSubscriptions.add(topic);
@@ -145,6 +150,7 @@ export default class FoxgloveWebSocketPlayer implements Player {
 
     client.on("serverInfo", (event) => {
       this._name = `${this._url}\n${event.name}`;
+      this._serverPublishesTime = event.capabilities.includes(ServerCapability.time);
       this._emitState();
     });
 
@@ -236,7 +242,7 @@ export default class FoxgloveWebSocketPlayer implements Player {
       this._emitState();
     });
 
-    client.on("message", ({ subscriptionId, timestamp, data }) => {
+    client.on("message", ({ subscriptionId, data }) => {
       this._receivedBytes += data.byteLength;
       if (!this._hasReceivedMessage) {
         this._hasReceivedMessage = true;
@@ -256,23 +262,10 @@ export default class FoxgloveWebSocketPlayer implements Player {
       }
 
       try {
-        const receiveTime = fromNanoSec(timestamp);
+        const receiveTime = this._getCurrentTime();
         const topic = chanInfo.channel.topic;
-        // If time goes backwards, increment lastSeekTime and discard unemitted messages from before
-        // the discontinuity. This prevents us from queueing an unbounded number of messages when
-        // servers loop over the same recorded data multiple times. However, for now the queue can
-        // still grow unboundedly in a live system if the listener is not processing messages (such
-        // as when the app is hidden/backgrounded).
-        if (this._currentTime && isLessThan(receiveTime, this._currentTime)) {
-          ++this._lastSeekTime;
-          this._parsedMessages = [];
-        }
-        this._currentTime = receiveTime;
         if (!this._startTime || isLessThan(receiveTime, this._startTime)) {
           this._startTime = receiveTime;
-        }
-        if (!this._endTime || isGreaterThan(receiveTime, this._endTime)) {
-          this._endTime = receiveTime;
         }
         this._parsedMessages.push({
           topic,
@@ -303,6 +296,22 @@ export default class FoxgloveWebSocketPlayer implements Player {
         });
       }
       this._emitState();
+    });
+
+    client.on("time", ({ timestamp }) => {
+      if (this._serverPublishesTime) {
+        const time = fromNanoSec(timestamp);
+
+        if (this._clockTime == undefined) {
+          this._startTime = time;
+        } else if (isLessThan(time, this._clockTime)) {
+          ++this._lastSeekTime;
+          this._parsedMessages = [];
+        }
+
+        this._clockTime = time;
+        this._emitState();
+      }
     });
   };
 
@@ -354,6 +363,7 @@ export default class FoxgloveWebSocketPlayer implements Player {
       });
     }
 
+    const currentTime = this._getCurrentTime();
     const messages = this._parsedMessages;
     this._parsedMessages = [];
     return this._listener({
@@ -373,8 +383,8 @@ export default class FoxgloveWebSocketPlayer implements Player {
         messages,
         totalBytesReceived: this._receivedBytes,
         startTime: this._startTime ?? ZERO_TIME,
-        endTime: this._endTime ?? ZERO_TIME,
-        currentTime: this._currentTime ?? ZERO_TIME,
+        endTime: currentTime,
+        currentTime,
         isPlaying: true,
         speed: 1,
         lastSeekTime: this._lastSeekTime,
@@ -475,5 +485,9 @@ export default class FoxgloveWebSocketPlayer implements Player {
     throw new Error("Service calls are not supported by the Foxglove WebSocket connection");
   }
 
-  public setGlobalVariables(): void { }
+  public setGlobalVariables(): void {}
+
+  private _getCurrentTime(): Time {
+    return this._clockTime ?? fromMillis(Date.now());
+  }
 }
