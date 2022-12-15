@@ -63,6 +63,8 @@ export default class FoxgloveWebSocketPlayer implements Player {
 
   /** Earliest time seen */
   private _startTime?: Time;
+  /** Latest time seen */
+  private _endTime?: Time;
   /* The most recent published time, if available */
   private _clockTime?: Time;
   private _serverPublishesTime = false;
@@ -126,6 +128,7 @@ export default class FoxgloveWebSocketPlayer implements Player {
       log.info("Connection closed:", event);
       this._presence = PlayerPresence.RECONNECTING;
       this._startTime = undefined;
+      this._endTime = undefined;
       this._clockTime = undefined;
       this._serverPublishesTime = false;
 
@@ -299,19 +302,18 @@ export default class FoxgloveWebSocketPlayer implements Player {
     });
 
     client.on("time", ({ timestamp }) => {
-      if (this._serverPublishesTime) {
-        const time = fromNanoSec(timestamp);
-
-        if (this._clockTime == undefined) {
-          this._startTime = time;
-        } else if (isLessThan(time, this._clockTime)) {
-          ++this._lastSeekTime;
-          this._parsedMessages = [];
-        }
-
-        this._clockTime = time;
-        this._emitState();
+      if (!this._serverPublishesTime) {
+        return;
       }
+
+      const time = fromNanoSec(timestamp);
+      if (this._clockTime != undefined && isLessThan(time, this._clockTime)) {
+        ++this._lastSeekTime;
+        this._parsedMessages = [];
+      }
+
+      this._clockTime = time;
+      this._emitState();
     });
   };
 
@@ -364,6 +366,13 @@ export default class FoxgloveWebSocketPlayer implements Player {
     }
 
     const currentTime = this._getCurrentTime();
+    if (this._startTime == undefined) {
+      this._startTime = currentTime;
+    }
+    if (this._endTime == undefined || isGreaterThan(currentTime, this._endTime)) {
+      this._endTime = currentTime;
+    }
+
     const messages = this._parsedMessages;
     this._parsedMessages = [];
     return this._listener({
@@ -382,8 +391,8 @@ export default class FoxgloveWebSocketPlayer implements Player {
       activeData: {
         messages,
         totalBytesReceived: this._receivedBytes,
-        startTime: this._startTime ?? ZERO_TIME,
-        endTime: currentTime,
+        startTime: this._startTime,
+        endTime: this._endTime,
         currentTime,
         isPlaying: true,
         speed: 1,
@@ -488,6 +497,6 @@ export default class FoxgloveWebSocketPlayer implements Player {
   public setGlobalVariables(): void {}
 
   private _getCurrentTime(): Time {
-    return this._clockTime ?? fromMillis(Date.now());
+    return this._serverPublishesTime ? this._clockTime ?? ZERO_TIME : fromMillis(Date.now());
   }
 }
