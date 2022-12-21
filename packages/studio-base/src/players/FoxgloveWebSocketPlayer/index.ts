@@ -305,7 +305,7 @@ export default class FoxgloveWebSocketPlayer implements Player {
 
       const time = fromNanoSec(timestamp);
       if (this._clockTime != undefined && isLessThan(time, this._clockTime)) {
-        ++this._lastSeekTime;
+        this._lastSeekTime = time.sec;
         this._parsedMessages = [];
       }
 
@@ -491,7 +491,7 @@ export default class FoxgloveWebSocketPlayer implements Player {
     throw new Error("Service calls are not supported by the Foxglove WebSocket connection");
   }
 
-  public setGlobalVariables(): void {}
+  public setGlobalVariables(): void { }
 
   private _getCurrentTime(): Time {
     return this._serverPublishesTime ? this._clockTime ?? ZERO_TIME : fromMillis(Date.now());
