@@ -24,7 +24,13 @@ import {
   TopicStats,
 } from "@foxglove/studio-base/players/types";
 import { RosDatatypes } from "@foxglove/studio-base/types/RosDatatypes";
-import { Channel, ChannelId, FoxgloveClient, SubscriptionId } from "@foxglove/ws-protocol";
+import {
+  Channel,
+  ChannelId,
+  FoxgloveClient,
+  ServerCapability,
+  SubscriptionId,
+} from "@foxglove/ws-protocol";
 
 const log = Log.getLogger(__dirname);
 
@@ -61,6 +67,10 @@ export default class FoxgloveWebSocketPlayer implements Player {
   private _currentTime?: Time;
   /** Latest time seen */
   private _endTime?: Time;
+  /* The most recent published time, if available */
+  private _clockTime?: Time;
+  /* Flag indicating if the server publishes time messages */
+  private _serverPublishesTime = false;
 
   private _unresolvedSubscriptions = new Set<string>();
   private _resolvedSubscriptionsByTopic = new Map<string, SubscriptionId>();
@@ -123,6 +133,8 @@ export default class FoxgloveWebSocketPlayer implements Player {
       this._startTime = undefined;
       this._currentTime = undefined;
       this._endTime = undefined;
+      this._clockTime = undefined;
+      this._serverPublishesTime = false;
 
       for (const topic of this._resolvedSubscriptionsByTopic.keys()) {
         this._unresolvedSubscriptions.add(topic);
@@ -145,6 +157,7 @@ export default class FoxgloveWebSocketPlayer implements Player {
 
     client.on("serverInfo", (event) => {
       this._name = `${this._url}\n${event.name}`;
+      this._serverPublishesTime = event.capabilities.includes(ServerCapability.time);
       this._emitState();
     });
 
@@ -301,6 +314,21 @@ export default class FoxgloveWebSocketPlayer implements Player {
           error,
         });
       }
+      this._emitState();
+    });
+
+    client.on("time", ({ timestamp }) => {
+      if (!this._serverPublishesTime) {
+        return;
+      }
+
+      const time = fromNanoSec(timestamp);
+      if (this._clockTime != undefined && isLessThan(time, this._clockTime)) {
+        ++this._lastSeekTime;
+        this._parsedMessages = [];
+      }
+
+      this._clockTime = time;
       this._emitState();
     });
   };
